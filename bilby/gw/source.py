@@ -345,6 +345,7 @@ def lal_binary_black_hole(
 def lal_binary_neutron_star(
         frequency_array, mass_1, mass_2, luminosity_distance, a_1, tilt_1,
         phi_12, a_2, tilt_2, phi_jl, theta_jn, phase, lambda_1, lambda_2,
+        resonance_f_1, resonance_f_2, resonance_dPhi_1, resonance_dPhi_2,
         **kwargs):
     """ A Binary Neutron Star waveform model using lalsimulation
 
@@ -423,7 +424,10 @@ def lal_binary_neutron_star(
         frequency_array=frequency_array, mass_1=mass_1, mass_2=mass_2,
         luminosity_distance=luminosity_distance, theta_jn=theta_jn, phase=phase,
         a_1=a_1, a_2=a_2, tilt_1=tilt_1, tilt_2=tilt_2, phi_12=phi_12,
-        phi_jl=phi_jl, lambda_1=lambda_1, lambda_2=lambda_2, **waveform_kwargs)
+        phi_jl=phi_jl, lambda_1=lambda_1, lambda_2=lambda_2,
+        resonance_f_1=resonance_f_1, resonance_f_2=resonance_f_2,
+        resonance_dPhi_1=resonance_dPhi_1, resonance_dPhi_2=resonance_dPhi_2,
+        **waveform_kwargs)
 
 
 def lal_eccentric_binary_black_hole_no_spins(
@@ -493,7 +497,9 @@ def lal_eccentric_binary_black_hole_no_spins(
         eccentricity=eccentricity, **waveform_kwargs)
 
 
-def set_waveform_dictionary(waveform_kwargs, lambda_1=0, lambda_2=0):
+def set_waveform_dictionary(waveform_kwargs, lambda_1=0, lambda_2=0,
+                            resonance_f_1=0, resonance_f_2=0,
+                            resonance_dPhi_1=0, resonance_dPhi_2=0):
     """
     Add keyword arguments to the :code:`LALDict` object.
 
@@ -517,6 +523,10 @@ def set_waveform_dictionary(waveform_kwargs, lambda_1=0, lambda_2=0):
     waveform_dictionary = waveform_kwargs.pop('lal_waveform_dictionary', CreateDict())
     waveform_kwargs["TidalLambda1"] = lambda_1
     waveform_kwargs["TidalLambda2"] = lambda_2
+    waveform_kwargs["resonance_f_1"] = resonance_f_1
+    waveform_kwargs["resonance_f_2"] = resonance_f_2
+    waveform_kwargs["resonance_dPhi_1"] = resonance_dPhi_1
+    waveform_kwargs["resonance_dPhi_2"] = resonance_dPhi_2
     waveform_kwargs["NumRelData"] = waveform_kwargs.pop("numerical_relativity_file", None)
 
     for key in [
@@ -545,7 +555,9 @@ def set_waveform_dictionary(waveform_kwargs, lambda_1=0, lambda_2=0):
 def _base_lal_cbc_fd_waveform(
         frequency_array, mass_1, mass_2, luminosity_distance, theta_jn, phase,
         a_1=0.0, a_2=0.0, tilt_1=0.0, tilt_2=0.0, phi_12=0.0, phi_jl=0.0,
-        lambda_1=0.0, lambda_2=0.0, eccentricity=0.0, **waveform_kwargs):
+        lambda_1=0.0, lambda_2=0.0, resonance_f_1=0.0, resonance_f_2=0.0,
+        resonance_dPhi_1=0.0, resonance_dPhi_2=0.0, eccentricity=0.0,
+        **waveform_kwargs):
     """ Generate a cbc waveform model using lalsimulation
 
     Parameters
@@ -596,7 +608,10 @@ def _base_lal_cbc_fd_waveform(
     catch_waveform_errors = waveform_kwargs.pop('catch_waveform_errors')
     pn_amplitude_order = waveform_kwargs['pn_amplitude_order']
 
-    waveform_dictionary = set_waveform_dictionary(waveform_kwargs, lambda_1, lambda_2)
+    waveform_dictionary = set_waveform_dictionary(
+        waveform_kwargs, lambda_1, lambda_2,
+        resonance_f_1, resonance_f_2, resonance_dPhi_1, resonance_dPhi_2
+    )
     approximant = lalsim_GetApproximantFromString(waveform_approximant)
 
     if pn_amplitude_order != 0:
@@ -677,10 +692,64 @@ def _base_lal_cbc_fd_waveform(
         h_plus[frequency_bounds] *= time_shift
         h_cross[frequency_bounds] *= time_shift
 
+    waveform_kwargs["resonance_f_1"] = resonance_f_1
+    waveform_kwargs["resonance_f_2"] = resonance_f_2
+    waveform_kwargs["resonance_dPhi_1"] = resonance_dPhi_1
+    waveform_kwargs["resonance_dPhi_2"] = resonance_dPhi_2
+    phase_resonance_shift = compute_phase_resonance_shift(
+        frequency_array[frequency_bounds], waveform_kwargs
+    )
+
+    h_plus[frequency_bounds] *= phase_resonance_shift
+    h_cross[frequency_bounds] *= phase_resonance_shift
+
     if len(waveform_kwargs) > 0:
         logger.warning(UNUSED_KWARGS_MESSAGE.format(waveform_kwargs=waveform_kwargs))
 
     return dict(plus=h_plus, cross=h_cross)
+
+
+def compute_phase_resonance_shift(
+    freqs: np.array, waveform_kwargs: dict
+) -> np.array:
+    """
+    Compute the complex phase resonance shift, i.e. exp(i * resonance_shift).
+
+    Parameters
+    ==========
+    freqs: np.array
+        Frequency array
+    waveform_kwargs: dict
+        Parameters, which also contain the resonance parameters
+
+    Returns
+    =======
+    phase_resonance_shift: np.array
+        Complex exponential phase to be added to `h_plus` and `h_cross`
+    """
+
+    resonance_f_1 = waveform_kwargs["resonance_f_1"]
+    resonance_f_2 = waveform_kwargs["resonance_f_2"]
+    resonance_dPhi_1 = waveform_kwargs["resonance_dPhi_1"]
+    resonance_dPhi_2 = waveform_kwargs["resonance_dPhi_2"]
+
+    if resonance_f_1 > 0.0 and resonance_f_2 > 0.0:
+        term1 = np.where(freqs < resonance_f_1, 0.0, (1 - freqs / resonance_f_1) * resonance_dPhi_1)
+        term2 = np.where(freqs < resonance_f_2, 0.0, (1 - freqs / resonance_f_2) * resonance_dPhi_2)
+    else:
+        term1 = np.zeros_like(freqs)
+        term2 = np.zeros_like(freqs)
+
+    resonance_shift = term1 + term2
+    phase_resonance_shift = np.exp(1j * resonance_shift)
+
+    # Pop the resonance params from waveform_kwargs to avoid unused kwargs message
+    waveform_kwargs.pop("resonance_f_1")
+    waveform_kwargs.pop("resonance_f_2")
+    waveform_kwargs.pop("resonance_dPhi_1")
+    waveform_kwargs.pop("resonance_dPhi_2")
+
+    return phase_resonance_shift
 
 
 def binary_black_hole_roq(
@@ -974,7 +1043,8 @@ def binary_black_hole_frequency_sequence(
 def binary_neutron_star_frequency_sequence(
         frequency_array, mass_1, mass_2, luminosity_distance, a_1, tilt_1,
         phi_12, a_2, tilt_2, phi_jl, lambda_1, lambda_2, theta_jn, phase,
-        **kwargs):
+        resonance_f_1=0.0, resonance_f_2=0.0, resonance_dPhi_1=0.0,
+        resonance_dPhi_2=0.0, **kwargs):
     """ A Binary Neutron Star waveform model using lalsimulation. This generates
     a waveform only on specified frequency points. This is useful for
     likelihood requiring waveform values at a subset of all the frequency
@@ -1050,6 +1120,16 @@ def binary_neutron_star_frequency_sequence(
         catch_waveform_errors=False, pn_spin_order=-1, pn_tidal_order=-1,
         pn_phase_order=-1, pn_amplitude_order=0)
     waveform_kwargs.update(kwargs)
+
+    waveform_kwargs["resonance_f_1"] = resonance_f_1
+    waveform_kwargs["resonance_f_2"] = resonance_f_2
+    waveform_kwargs["resonance_dPhi_1"] = resonance_dPhi_1
+    waveform_kwargs["resonance_dPhi_2"] = resonance_dPhi_2
+
+    # Popping these to avoid warning of unused kwargs for cleaner output
+    waveform_kwargs.pop("minimum_frequency")
+    waveform_kwargs.pop("maximum_frequency")
+
     return _base_waveform_frequency_sequence(
         frequency_array=frequency_array, mass_1=mass_1, mass_2=mass_2,
         luminosity_distance=luminosity_distance, theta_jn=theta_jn, phase=phase,
@@ -1101,7 +1181,16 @@ def _base_waveform_frequency_sequence(
     approximant = waveform_kwargs.pop('waveform_approximant')
     catch_waveform_errors = waveform_kwargs.pop('catch_waveform_errors')
 
-    waveform_dictionary = set_waveform_dictionary(waveform_kwargs, lambda_1, lambda_2)
+    resonance_f_1 = waveform_kwargs.pop('resonance_f_1')
+    resonance_f_2 = waveform_kwargs.pop('resonance_f_2')
+    resonance_dPhi_1 = waveform_kwargs.pop('resonance_dPhi_1')
+    resonance_dPhi_2 = waveform_kwargs.pop('resonance_dPhi_2')
+
+    waveform_dictionary = set_waveform_dictionary(
+        waveform_kwargs, lambda_1, lambda_2,
+        resonance_f_1=resonance_f_1, resonance_f_2=resonance_f_2,
+        resonance_dPhi_1=resonance_dPhi_1, resonance_dPhi_2=resonance_dPhi_2
+    )
     approximant = lalsim_GetApproximantFromString(approximant)
 
     luminosity_distance = luminosity_distance * 1e6 * utils.parsec
@@ -1136,10 +1225,19 @@ def _base_waveform_frequency_sequence(
             else:
                 raise
 
+    h_plus = h_plus.data.data
+    h_cross = h_cross.data.data
+
+    phase_resonance_shift = compute_phase_resonance_shift(
+        frequencies, waveform_kwargs
+    )
+    h_plus *= phase_resonance_shift
+    h_cross *= phase_resonance_shift
+
     if len(waveform_kwargs) > 0:
         logger.warning(UNUSED_KWARGS_MESSAGE.format(waveform_kwargs=waveform_kwargs))
 
-    return dict(plus=h_plus.data.data, cross=h_cross.data.data)
+    return dict(plus=h_plus, cross=h_cross)
 
 
 def sinegaussian(frequency_array, hrss, Q, frequency, **kwargs):

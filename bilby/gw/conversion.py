@@ -316,6 +316,8 @@ def convert_to_lal_binary_neutron_star_parameters(parameters):
     converted_parameters, added_keys =\
         convert_to_lal_binary_black_hole_parameters(converted_parameters)
 
+    added_keys += ["resonance_f_1", "resonance_f_2", "resonance_dPhi_1", "resonance_dPhi_2"]
+
     if not any([key in converted_parameters for key in
                 ['lambda_1', 'lambda_2',
                  'lambda_tilde', 'delta_lambda_tilde', 'lambda_symmetric',
